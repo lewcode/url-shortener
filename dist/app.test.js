@@ -1,12 +1,12 @@
-import { describe, test, expect, vi, beforeEach, beforeAll } from 'vitest';
-import { buildApp } from './app.js';
-import * as store from './store.js';
-import * as utils from './utils.js';
+import { describe, test, expect, vi, beforeAll } from "vitest";
+import { buildApp } from "./app.js";
+import * as store from "./store.js";
+import * as utils from "./utils.js";
 const app = buildApp();
 describe("Test server endpoints", () => {
     beforeAll(() => {
         vi.clearAllMocks();
-        vi.spyOn(store, "getSlug").mockReturnValue("https://example.com");
+        vi.spyOn(store, "getSlug").mockResolvedValue("https://example.com");
         vi.spyOn(utils, "randomSlugGenerator").mockReturnValue("dhhjqhi1234");
     });
     test("/get", async () => {
@@ -24,14 +24,18 @@ describe("Test server endpoints", () => {
             method: "POST",
             url: "/shorten",
             body: {
-                url: "https://example.com"
-            }
+                url: "https://example.com",
+            },
         });
         expect(response.statusCode).toBe(200);
-        expect(response.body).toEqual({
+        expect(response.json()).toEqual({
             slug: "dhhjqhi1234",
-            shortUrl: "//dhhjqhi1234"
+            shortUrl: "http://localhost/dhhjqhi1234",
         });
+    });
+    test("/metrics", async () => {
+        const response = await app.inject({ method: "GET", url: "/metrics" });
+        expect(response.statusCode).toBe(200);
     });
 });
 //# sourceMappingURL=app.test.js.map

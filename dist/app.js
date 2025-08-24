@@ -1,34 +1,35 @@
-import Fastify from 'fastify';
-import { collectDefaultMetrics, Counter, Histogram, Registry } from 'prom-client';
-import { shortenBody } from './types.js';
-import { getSlug } from './store.js';
-import { randomSlugGenerator } from './utils.js';
+import Fastify from "fastify";
+import { collectDefaultMetrics, Counter, Histogram, Registry, } from "prom-client";
+import { shortenBody } from "./types.js";
+import { getSlug } from "./store.js";
+import { randomSlugGenerator } from "./utils.js";
+import redis from "./redis.js";
 export const buildApp = () => {
     const app = Fastify({
         logger: {
             level: process.env.LOG_LEVEL || "info",
             transport: {
-                target: 'pino-pretty',
+                target: "pino-pretty",
                 options: {
-                    colorize: true
-                }
-            }
-        }
+                    colorize: true,
+                },
+            },
+        },
     });
     const register = new Registry();
     collectDefaultMetrics({ register });
-    const httpDuration = new Histogram({
+    const httpRequestDuration = new Histogram({
         name: "http_request_duration_ms",
         help: "http request duration ms",
         labelNames: ["route", "method", "status"],
-        buckets: [5, 10, 25, 50, 100, 250, 500, 1000]
+        buckets: [5, 10, 25, 50, 100, 250, 500, 1000],
     });
     const httpRequests = new Counter({
         name: "http_request_total",
         help: "Total HTTP requests",
-        labelNames: ["route", "method", "status"]
+        labelNames: ["route", "method", "status"],
     });
-    register.registerMetric(httpDuration);
+    register.registerMetric(httpRequestDuration);
     register.registerMetric(httpRequests);
     app.get("/metrics", async (_req, reply) => {
         reply.header("Content-Type", register.contentType);
@@ -39,21 +40,39 @@ export const buildApp = () => {
             ok: true,
         };
     });
-    const store = new Map();
-    app.post("/shorten", (req, reply) => {
+    app.post("/shorten", {
+        schema: {
+            body: {
+                type: "object",
+                required: ["url"],
+                properties: {
+                    url: { type: "string", format: "uri" }, // ✅ must be valid URL
+                },
+            },
+            response: {
+                200: {
+                    type: "object",
+                    properties: {
+                        slug: { type: "string" },
+                        shortUrl: { type: "string" },
+                    },
+                },
+            },
+        },
+    }, (req) => {
         const body = shortenBody.parse(req.body);
         const slug = randomSlugGenerator();
-        store.set(slug, body.url);
+        redis.set(slug, body.url);
         return {
             slug,
-            shortUrl: `${process.env.BASE_URL ?? "http://localhost:3000"}/${slug}`
+            shortUrl: `${req.protocol}://${req.hostname}/${slug}`,
         };
     });
-    app.get("/:slug", (req, reply) => {
-        const target = getSlug(store, req);
+    app.get("/:slug", async (req, reply) => {
+        const target = await getSlug(req);
         if (!target) {
             return reply.code(404).send({
-                error: "slug not found"
+                error: "slug not found",
             });
         }
         return reply.redirect(target, 301);
@@ -63,11 +82,18 @@ export const buildApp = () => {
             // check this routerPath not available
             route: req.originalUrl ?? req.url,
             method: req.method,
-            status: String(reply.statusCode)
+            status: String(reply.statusCode),
         };
         httpRequests.inc(labels);
-        httpDuration.observe(labels, reply.elapsedTime);
+        httpRequestDuration.observe(labels, reply.elapsedTime);
         return payload;
+    });
+    app.addHook("onResponse", async (req, reply) => {
+        httpRequestDuration.labels({
+            route: req.originalUrl ?? req.url,
+            method: req.method,
+            status: String(reply.statusCode),
+        });
     });
     return app;
 };
