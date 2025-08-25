@@ -1,3 +1,3 @@
 export const randomSlugGenerator = () => {
-    return Math.random().toString(36).slice(2,8)
-}
+	return Math.random().toString(36).slice(2, 8);
+};
